@@ -1,0 +1,133 @@
+name: Subtree mirror
+description: Publish one directory of a repository to its own read-only mirror repository on GitHub.
+author: Illegal Studio
+
+inputs:
+  prefix:
+    description: Directory to publish, relative to the repository root.
+    required: true
+  repository:
+    description: Mirror repository on GitHub, as OWNER/NAME. It must exist; an empty repository is fine.
+    required: true
+  history:
+    description: >-
+      preserve publishes the directory's own history with its authors; flatten adds one commit by
+      the App's bot per publish. A preserve mirror can later switch to flatten, never the reverse.
+    default: preserve
+  message:
+    description: Message of a flatten commit. The default names the source repository and commit.
+    default: ""
+  push:
+    description: true publishes; anything else is a dry run that only checks the split and needs no credentials.
+    default: "false"
+  app-id:
+    description: ID of a GitHub App installed on the mirror's owner with contents write. Required to push.
+    default: ""
+  private-key:
+    description: Private key of that GitHub App. Required to push.
+    default: ""
+  workflows:
+    description: >-
+      Also request workflows write, which a push touching .github/workflows needs. auto requests it
+      when the published directory contains .github/workflows; true and false force it.
+    default: auto
+
+outputs:
+  sha:
+    description: The published commit; on a dry run, the commit (preserve) or tree (flatten) that would be published.
+    value: ${{ steps.publish.outputs.sha }}
+  published:
+    description: true when the mirror's main moved, false otherwise.
+    value: ${{ steps.publish.outputs.published }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the credentials
+      if: inputs.push == 'true' && (inputs.app-id == '' || inputs.private-key == '')
+      shell: bash
+      run: |
+        echo "::error::app-id and private-key are required when push is true."
+        exit 1
+
+    - name: Resolve the mirror
+      id: mirror
+      if: inputs.push == 'true'
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
+        REPOSITORY: ${{ inputs.repository }}
+        WORKFLOWS: ${{ inputs.workflows }}
+      run: |
+        if [[ ! $REPOSITORY =~ ^[^/]+/[^/]+$ ]]; then
+          echo "::error::repository must be OWNER/NAME, not '$REPOSITORY'."
+          exit 1
+        fi
+        case $WORKFLOWS in
+          true) workflows=write ;;
+          false) workflows="" ;;
+          auto)
+            workflows=""
+            if git cat-file -e "HEAD:${PREFIX%/}/.github/workflows" 2> /dev/null; then
+              workflows=write
+            fi ;;
+          *)
+            echo "::error::workflows must be auto, true or false, not '$WORKFLOWS'."
+            exit 1 ;;
+        esac
+        {
+          echo "owner=${REPOSITORY%%/*}"
+          echo "name=${REPOSITORY#*/}"
+          echo "workflows=$workflows"
+        } >> "$GITHUB_OUTPUT"
+
+    # The token is limited to the one mirror and revoked when the job ends.
+    - name: Mint a token for the mirror
+      id: token
+      if: inputs.push == 'true'
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ steps.mirror.outputs.owner }}
+        repositories: ${{ steps.mirror.outputs.name }}
+        permission-contents: write
+        # An empty value requests nothing.
+        permission-workflows: ${{ steps.mirror.outputs.workflows }}
+
+    # Flattened commits are authored by the App's bot user, whose noreply address carries its ID.
+    - name: Resolve the bot identity
+      id: bot
+      if: inputs.push == 'true' && inputs.history == 'flatten'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        SLUG: ${{ steps.token.outputs.app-slug }}
+      run: |
+        id=$(gh api "users/${SLUG}%5Bbot%5D" --jq .id)
+        {
+          echo "name=${SLUG}[bot]"
+          echo "email=${id}+${SLUG}[bot]@users.noreply.github.com"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Publish
+      id: publish
+      shell: bash
+      env:
+        MIRROR_TOKEN: ${{ steps.token.outputs.token }}
+        MIRROR_BOT_NAME: ${{ steps.bot.outputs.name }}
+        MIRROR_BOT_EMAIL: ${{ steps.bot.outputs.email }}
+        PREFIX: ${{ inputs.prefix }}
+        REPOSITORY: ${{ inputs.repository }}
+        HISTORY: ${{ inputs.history }}
+        MESSAGE: ${{ inputs.message }}
+        PUSH: ${{ inputs.push }}
+      run: |
+        args=(--prefix "$PREFIX" --repository "$REPOSITORY" --history "$HISTORY")
+        if [[ -n $MESSAGE ]]; then
+          args+=(--message "$MESSAGE")
+        fi
+        if [[ $PUSH == true ]]; then
+          args+=(--push)
+        fi
+        bash "$GITHUB_ACTION_PATH/publish.sh" "${args[@]}"

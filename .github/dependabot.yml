@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Keeps the pinned action SHAs moving, in the workflows and inside the actions.
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /actions/subtree-mirror
+    schedule:
+      interval: weekly

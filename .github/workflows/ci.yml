@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  subtree-mirror:
+    name: Subtree mirror
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Lint the scripts
+        run: shellcheck actions/subtree-mirror/*.sh
+
+      - name: Test the publisher
+        run: bash actions/subtree-mirror/test.sh
+
+      # Runs the action itself, without credentials, on its own directory.
+      - name: Dry-run the action
+        id: dry-run
+        uses: ./actions/subtree-mirror
+        with:
+          prefix: actions/subtree-mirror
+          repository: illegalstudio/subtree-mirror-example
+
+      - name: Check the dry run outputs
+        env:
+          SHA: ${{ steps.dry-run.outputs.sha }}
+          PUBLISHED: ${{ steps.dry-run.outputs.published }}
+        run: |
+          [[ $(git rev-parse "$SHA^{tree}") == $(git rev-parse HEAD:actions/subtree-mirror) ]]
+          [[ $PUBLISHED == false ]]
