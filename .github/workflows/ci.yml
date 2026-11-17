@@ -9,6 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  owner-pr-approval:
+    name: Owner approval policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: node --test automation/owner-pr-approval/approve.test.cjs
+
   subtree-mirror:
     name: Subtree mirror
     runs-on: ubuntu-24.04

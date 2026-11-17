@@ -1,0 +1,11 @@
+{
+  "author": "nahime0",
+  "bot": "illegal-studio[bot]",
+  "repositories": [
+    {
+      "name": "illegalstudio/elephc",
+      "base": "main",
+      "workflows": ["ci.yml"]
+    }
+  ]
+}

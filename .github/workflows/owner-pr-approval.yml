@@ -1,0 +1,63 @@
+name: Owner PR approval
+
+on:
+  schedule:
+    - cron: '2-59/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: 'PR number on elephc, or empty to scan all owner PRs'
+        type: string
+        default: ''
+      dry_run:
+        description: 'Report eligible PRs without posting approvals'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owner-pr-approval
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || vars.OWNER_PR_AUTO_APPROVAL_ENABLED == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Only central main is checked out. No code from a candidate PR is executed.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Test the approval policy
+        run: node --test automation/owner-pr-approval/approve.test.cjs
+
+      - name: Mint a token limited to elephc
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
+          private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
+          owner: illegalstudio
+          repositories: elephc
+          permission-pull-requests: write
+          permission-actions: read
+          permission-contents: read
+
+      - name: Approve eligible owner PRs
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR_NUMBER: ${{ inputs.pull_request }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [[ "$DRY_RUN" == true ]]; then
+            node automation/owner-pr-approval/approve.cjs
+          else
+            node automation/owner-pr-approval/approve.cjs --apply
+          fi
