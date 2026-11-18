@@ -6,8 +6,8 @@ Shared GitHub automation for Illegal Studio repositories.
 
 [`Owner PR approval`](automation/owner-pr-approval) uses Illegal Bot to approve
 eligible `nahime0` PRs on elephc after CI passes. It polls every five minutes when
-enabled and never automatically repeats an earlier approval, including one
-dismissed after a push. No workflow needs to be installed in the target repo.
+enabled and can renew an approval after CI passes on a new head commit. No
+workflow needs to be installed in the target repo.
 
 ## Actions
 

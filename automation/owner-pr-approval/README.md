@@ -10,11 +10,11 @@ elephc's three required CI aggregate checks. Missing, running, failed, cancelled
 and skipped workflow runs do not qualify. A newer run supersedes an older green
 result. Active change requests prevent approval.
 
-The bot approves each PR at most once. An earlier approval, including one now
-marked `DISMISSED`, prevents another automatic approval even on a different SHA.
-Current or historical merge-queue membership also prevents approval. This keeps
-automatic approval from restoring approval after a push revokes it or from
-reapproving a PR that left the queue. Such PRs need an explicit human approval.
+The bot approves each head SHA of a PR at most once, including approvals later
+marked `DISMISSED`. A push to a new head can receive a fresh approval after CI
+passes there. A pending bot review or a bot request for changes blocks approval.
+The bot skips PRs currently in the merge queue. For PRs that previously entered
+the queue, it only renews an earlier bot approval on a different head SHA.
 
 The script rechecks eligibility and CI before writing and submits the review for
 the exact inspected commit. GitHub remains responsible for dismissing stale
@@ -37,7 +37,7 @@ gh workflow run owner-pr-approval.yml --repo illegalstudio/.github \
 ```
 
 Set `dry_run=false` to post approvals. Manual runs use exactly the same policy and
-cannot override earlier bot approvals, CI requirements or queue history.
+require the same CI, review and merge queue checks.
 
 `ILLEGAL_BOT_APP_ID` and `ILLEGAL_BOT_PRIVATE_KEY` are inherited organization
 secrets. Each run mints a short-lived installation token limited to elephc with

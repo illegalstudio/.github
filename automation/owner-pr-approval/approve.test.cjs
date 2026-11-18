@@ -5,6 +5,11 @@ const policy = require('./config.json');
 const target = policy.repositories[0];
 const sha = 'a'.repeat(40);
 const otherSha = 'b'.repeat(40);
+const queueHistory = { nodes: [{ __typename: 'AddedToMergeQueueEvent' }] };
+
+function botReview(state, commit_id = sha) {
+  return { user: { login: policy.bot }, state, commit_id };
+}
 
 function pullRequest(overrides = {}) {
   return {
@@ -55,25 +60,67 @@ test('only an open owner PR targeting main is eligible', () => {
   }
 });
 
-test('current and historical queue membership prevents automatic approval', () => {
-  for (const change of [{ isInMergeQueue: true },
-    { timelineItems: { nodes: [{ __typename: 'AddedToMergeQueueEvent' }] } }]) {
-    const input = fixture({ snapshots: [pullRequest(change)] });
+test('current queue membership blocks renewal even on a new head', () => {
+  const input = fixture({
+    snapshots: [pullRequest({ isInMergeQueue: true })],
+    reviews: [botReview('DISMISSED', otherSha)],
+  });
+  assert.equal(approveOne({ ...input, apply: true }), 'skipped');
+  assert.equal(input.writes.length, 0);
+});
+
+test('historical queue membership allows renewal of an earlier bot approval', () => {
+  const snapshots = [pullRequest({ timelineItems: queueHistory })];
+  const firstApproval = fixture({ snapshots });
+  assert.equal(approveOne({ ...firstApproval, apply: true }), 'skipped');
+  assert.equal(firstApproval.writes.length, 0);
+
+  const renewal = fixture({ snapshots, reviews: [botReview('DISMISSED', otherSha)] });
+  assert.equal(approveOne({ ...renewal, apply: true }), 'approved');
+  assert.equal(renewal.writes[0].commit_id, sha);
+});
+
+test('a bot approval or dismissal on the current head prevents duplicate approval', () => {
+  for (const state of ['APPROVED', 'DISMISSED']) {
+    const input = fixture({ reviews: [botReview(state)] });
     assert.equal(approveOne({ ...input, apply: true }), 'skipped');
     assert.equal(input.writes.length, 0);
   }
 });
 
-test('a prior bot approval or dismissal prevents approval on any later commit', () => {
-  for (const state of ['APPROVED', 'DISMISSED', 'PENDING', 'CHANGES_REQUESTED']) {
-    const input = fixture({ reviews: [{ user: { login: policy.bot }, state, commit_id: otherSha }] });
+test('a pending bot review or change request blocks approval on a new head', () => {
+  for (const state of ['PENDING', 'CHANGES_REQUESTED']) {
+    const input = fixture({ reviews: [botReview(state, otherSha)] });
     assert.equal(approveOne({ ...input, apply: true }), 'skipped');
     assert.equal(input.writes.length, 0);
   }
   assert.equal(eligibility(pullRequest(), [
-    { user: { login: policy.bot }, state: 'COMMENTED' },
+    botReview('COMMENTED'),
     { user: { login: 'other' }, state: 'APPROVED' },
   ], target), null);
+});
+
+test('approval is renewed once the new head has a successful CI run', () => {
+  for (const state of ['APPROVED', 'DISMISSED']) {
+    const reviews = [botReview(state, otherSha)];
+    let runs = [workflow({ head_sha: otherSha })];
+    const input = fixture({ reviews, runs: () => runs });
+
+    assert.equal(approveOne({ ...input, apply: true }), 'skipped');
+    runs = [workflow({ status: 'in_progress', conclusion: null })];
+    assert.equal(approveOne({ ...input, apply: true }), 'skipped');
+    runs = [workflow({ conclusion: 'failure' })];
+    assert.equal(approveOne({ ...input, apply: true }), 'skipped');
+    assert.equal(input.writes.length, 0);
+
+    runs = [workflow()];
+    assert.equal(approveOne({ ...input, apply: true }), 'approved');
+    assert.equal(input.writes[0].commit_id, sha);
+
+    reviews.push(botReview('APPROVED'));
+    assert.equal(approveOne({ ...input, apply: true }), 'skipped');
+    assert.equal(input.writes.length, 1);
+  }
 });
 
 test('CI must succeed for the exact head, workflow and PR event', () => {
@@ -110,7 +157,7 @@ test('approval is bound to the inspected exact commit', () => {
 
 test('a head change or queue entry before writing aborts approval', () => {
   for (const change of [{ headRefOid: otherSha }, { isInMergeQueue: true },
-    { timelineItems: { nodes: [{ __typename: 'AddedToMergeQueueEvent' }] } }]) {
+    { timelineItems: queueHistory }]) {
     const input = fixture({ snapshots: [pullRequest(), pullRequest(change)] });
     assert.equal(approveOne({ ...input, apply: true }), 'skipped');
     assert.equal(input.writes.length, 0);
@@ -130,7 +177,7 @@ test('a bot approval appearing during inspection prevents a duplicate', () => {
   let reads = 0;
   const api = (args, payload) => {
     if (args.some(arg => arg.endsWith('/reviews?per_page=100')) && ++reads === 2) {
-      return [[{ user: { login: policy.bot }, state: 'APPROVED' }]];
+      return [[botReview('APPROVED')]];
     }
     return input.api(args, payload);
   };

@@ -42,12 +42,16 @@ function eligibility(pr, reviews, target, policy = config) {
   if (pr.state !== 'OPEN' || pr.isDraft) return 'closed or draft';
   if (pr.baseRefName !== target.base) return 'different base';
   if (pr.isInMergeQueue) return 'already in merge queue';
-  if (pr.timelineItems.nodes.length) return 'previously entered merge queue';
   if (pr.reviewDecision === 'CHANGES_REQUESTED') return 'changes requested';
-  if (reviews.some(review => review.user?.login === policy.bot &&
-      ['APPROVED', 'DISMISSED', 'PENDING', 'CHANGES_REQUESTED'].includes(review.state))) {
-    return 'bot already reviewed, including dismissed approvals';
+  const botReviews = reviews.filter(review => review.user?.login === policy.bot);
+  if (botReviews.some(review => ['PENDING', 'CHANGES_REQUESTED'].includes(review.state))) {
+    return 'bot review pending or changes requested';
   }
+  const botApprovals = botReviews.filter(review => ['APPROVED', 'DISMISSED'].includes(review.state));
+  if (botApprovals.some(review => !review.commit_id || review.commit_id === pr.headRefOid)) {
+    return 'bot already approved current head, including dismissed approvals';
+  }
+  if (pr.timelineItems.nodes.length && botApprovals.length === 0) return 'previously entered merge queue';
   return null;
 }
 
@@ -96,8 +100,7 @@ function approveOne({ api = gh, target, number, apply = false, policy = config, 
     commit_id: fresh.pr.headRefOid,
     event: 'APPROVE',
     body: 'Automatic owner approval by Illegal Bot: author nahime0, CI passed on this commit. '
-      + 'This is an automation policy approval, not a human code review. '
-      + 'It will not be automatically renewed after dismissal or a later push.',
+      + 'This approval records that the commit met the automation policy.',
   });
   if (review.state !== 'APPROVED' || review.commit_id !== fresh.pr.headRefOid ||
       review.user?.login !== policy.bot) throw new Error(`Unexpected approval result for ${label}`);
